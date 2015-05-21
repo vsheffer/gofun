@@ -26,13 +26,13 @@ type CommitRequest struct {
 	FileName string `json:"fileName"`
 }
 
+type FileListResponse struct {
+	FileList []string `json:"fileList"`
+}
+
 type Response struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
-}
-
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Howdy %s", r.Method)
 }
 
 func saveSpecFileHandler(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +46,47 @@ func saveSpecFileHandler(w http.ResponseWriter, r *http.Request) {
 	fileName := mux.Vars(r)["filename"]
 	ioutil.WriteFile(repoDir+fileName, fileBytes, 0644)
 	json.NewEncoder(w).Encode(Response{Status: Success, Message: "File " + fileName + " saved."})
+}
+
+func getRepoDirListingHandler(w http.ResponseWriter, r *http.Request) {
+	// Return list of files.
+
+	fileList, _ := ioutil.ReadDir(repoDir)
+
+	// Get the number of files that will be returned...
+
+	numFilesToReturn := 0
+	for _, fileInfo := range fileList {
+		if strings.Index(fileInfo.Name(), ".") == 0 || fileInfo.IsDir() {
+			continue
+		}
+
+		numFilesToReturn += 1
+	}
+
+	fileListResponse := FileListResponse{FileList: make([]string, numFilesToReturn)}
+	listIndex := 0
+	for _, fileInfo := range fileList {
+		if strings.Index(fileInfo.Name(), ".") == 0 || fileInfo.IsDir() {
+			continue
+		}
+		fileListResponse.FileList[listIndex] = fileInfo.Name()
+		listIndex += 1
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(fileListResponse)
+}
+
+func getSpecFileHandler(w http.ResponseWriter, r *http.Request) {
+	fileName := mux.Vars(r)["filename"]
+	bytes, err := ioutil.ReadFile(repoDir + fileName)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+	} else {
+		w.Header().Set("Content-Type", "text/yaml")
+		w.Write(bytes)
+	}
 }
 
 func commitFileHandler(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +163,8 @@ func main() {
 	log.Printf("repos = %+v", repo)
 
 	r := mux.NewRouter().StrictSlash(false)
+	r.HandleFunc("/specfiles", getRepoDirListingHandler).Methods("GET")
+	r.HandleFunc("/specfiles/{filename}", getSpecFileHandler).Methods("GET")
 	r.HandleFunc("/specfiles/{filename}", saveSpecFileHandler).Methods("PUT")
 	r.HandleFunc("/commitfile/{filename}", commitFileHandler).Methods("POST")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(staticDir)))
