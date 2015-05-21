@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/gorilla/mux"
@@ -16,6 +17,20 @@ var sig *git.Signature
 var repoDir string
 var staticDir string
 
+const (
+	Success string = "success"
+	Error   string = "error"
+)
+
+type CommitRequest struct {
+	FileName string `json:"fileName"`
+}
+
+type Response struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Howdy %s", r.Method)
 }
@@ -28,7 +43,12 @@ func saveSpecFileHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("fileBytes = %s", string(fileBytes))
 
-	ioutil.WriteFile(repoDir+mux.Vars(r)["filename"], fileBytes, 0644)
+	fileName := mux.Vars(r)["filename"]
+	ioutil.WriteFile(repoDir+fileName, fileBytes, 0644)
+	json.NewEncoder(w).Encode(Response{Status: Success, Message: "File " + fileName + " saved."})
+}
+
+func commitFileHandler(w http.ResponseWriter, r *http.Request) {
 	index, err := repo.Index()
 	if err != nil {
 		log.Printf("Can't open index %+v", err)
@@ -102,11 +122,9 @@ func main() {
 	log.Printf("repos = %+v", repo)
 
 	r := mux.NewRouter().StrictSlash(false)
-	//	r.Handle("/", http.FileServer(http.Dir(staticDir)))
-	r.HandleFunc("/specfiles/{filename}", saveSpecFileHandler).Methods("PUT", "POST")
+	r.HandleFunc("/specfiles/{filename}", saveSpecFileHandler).Methods("PUT")
+	r.HandleFunc("/commitfile/{filename}", commitFileHandler).Methods("POST")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(staticDir)))
 	http.Handle("/", r)
-	//	specFiles := r.PathPrefix("/specfiles/{filename}").Subrouter()
-	//	specFiles.Methods("PUT", "POST").HandlerFunc(saveSpecFileHandler)
 	http.ListenAndServe(":8080", r)
 }
