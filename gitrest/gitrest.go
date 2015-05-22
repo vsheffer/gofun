@@ -90,6 +90,7 @@ func getSpecFileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func commitFileHandler(w http.ResponseWriter, r *http.Request) {
+	commitMessage := r.Header.Get("Commit-Message")
 	index, err := repo.Index()
 	if err != nil {
 		log.Printf("Can't open index %+v", err)
@@ -113,15 +114,14 @@ func commitFileHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("LookupTree error: %+v", err)
 	}
 
-	msg := "Updated " + fileName + "."
 	var commitErr error
 	currentBranch, err := repo.Head()
 	log.Printf("currentBranch = %+v", currentBranch)
 	if currentBranch != nil {
 		currentTip, _ := repo.LookupCommit(currentBranch.Target())
-		_, commitErr = repo.CreateCommit("HEAD", sig, sig, msg, tree, currentTip)
+		_, commitErr = repo.CreateCommit("HEAD", sig, sig, commitMessage, tree, currentTip)
 	} else {
-		_, commitErr = repo.CreateCommit("HEAD", sig, sig, msg, tree)
+		_, commitErr = repo.CreateCommit("HEAD", sig, sig, commitMessage, tree)
 	}
 
 	if commitErr != nil {
