@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/ghodss/yaml"
 	"github.com/gorilla/mux"
 	"github.com/libgit2/git2go"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 var repo *git.Repository
 var sig *git.Signature
 var repoDir string
 var staticDir string
+var corsAllowedHost string
 
 const (
 	Success string = "success"
@@ -24,6 +27,12 @@ const (
 
 type CommitRequest struct {
 	FileName string `json:"fileName"`
+}
+
+type LogEntry struct {
+	CommitterUsername string    `json:"committer"`
+	CommittedTime     time.Time `json:"commitedTime"`
+	Message           string    `json:"message"`
 }
 
 type FileListResponse struct {
@@ -84,13 +93,23 @@ func getSpecFileHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 	} else {
-		w.Header().Set("Content-Type", "text/yaml")
+		acceptHeader := r.Header.Get("Accept")
+		log.Printf("acceptsHeader = %s, %d", acceptHeader, strings.Index(acceptHeader, "application/json"))
+		w.Header().Set("Content-Type", "application/yaml")
+		if strings.Index(acceptHeader, "yaml") < 0 {
+			bytes, _ = yaml.YAMLToJSON(bytes)
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.Header().Set("Access-Control-Allow-Origin", corsAllowedHost)
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
 		w.Write(bytes)
 	}
 }
 
 func commitFileHandler(w http.ResponseWriter, r *http.Request) {
 	commitMessage := r.Header.Get("Commit-Message")
+	committer := r.Header.Get("Committer")
+
 	index, err := repo.Index()
 	if err != nil {
 		log.Printf("Can't open index %+v", err)
@@ -117,6 +136,9 @@ func commitFileHandler(w http.ResponseWriter, r *http.Request) {
 	var commitErr error
 	currentBranch, err := repo.Head()
 	log.Printf("currentBranch = %+v", currentBranch)
+	sig.Name = committer
+	sig.When = time.Now()
+	sig.Email = committer
 	if currentBranch != nil {
 		currentTip, _ := repo.LookupCommit(currentBranch.Target())
 		_, commitErr = repo.CreateCommit("HEAD", sig, sig, commitMessage, tree, currentTip)
@@ -131,9 +153,50 @@ func commitFileHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Filename = %s", fileName)
 }
 
+func historyHandler(w http.ResponseWriter, r *http.Request) {
+	fileName := mux.Vars(r)["filename"]
+	log.Printf("filename = %s", fileName)
+	revspec, err := repo.Revparse("HEAD^{tree}")
+	if err != nil {
+		log.Printf("revparse err = %+v", err)
+	}
+	head := revspec.From().Id()
+	log.Printf("head = %+v", head)
+	tree, err := repo.LookupTree(head)
+	if err != nil {
+		log.Printf("err = %+v", err)
+	}
+	entry := tree.EntryByName(fileName)
+	log.Printf("entry = %+v", entry)
+	walk, _ := repo.Walk()
+	walk.Push(entry.Id)
+	historyResponse := make([]LogEntry, 5)
+	numWalked := 0
+	walk.Iterate(func(commit *git.Commit) bool {
+		if numWalked > len(historyResponse) {
+			return false
+		}
+		log.Printf("oid = %+v", commit.Id())
+		historyResponse[numWalked] = LogEntry{
+			CommitterUsername: commit.Committer().Name,
+			CommittedTime:     commit.Committer().When,
+			Message:           commit.Message(),
+		}
+
+		numWalked += 1
+		return false
+	})
+
+	json.NewEncoder(w).Encode(historyResponse)
+}
+
+func newUserHandler(w http.ResponseWriter, r *http.Request) {
+}
+
 func main() {
 	flag.StringVar(&repoDir, "repo-dir", "", "The directory where the Git repository will be saved.")
 	flag.StringVar(&staticDir, "static-dir", "", "The directory containing static content to be served.")
+	flag.StringVar(&corsAllowedHost, "cors-allowed-origin", "*", "The hostname of the allowed origin for cors support.  All hosts are allowed by default.")
 	flag.Parse()
 	if len(repoDir) == 0 {
 		log.Fatalf("repo-dir is required.")
@@ -167,6 +230,7 @@ func main() {
 	r.HandleFunc("/specfiles/{filename}", getSpecFileHandler).Methods("GET")
 	r.HandleFunc("/specfiles/{filename}", saveSpecFileHandler).Methods("PUT")
 	r.HandleFunc("/commitfile/{filename}", commitFileHandler).Methods("POST")
+	r.HandleFunc("/history/{filename}", historyHandler).Methods("GET")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(staticDir)))
 	http.Handle("/", r)
 	http.ListenAndServe(":8080", r)
