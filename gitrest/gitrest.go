@@ -7,6 +7,7 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/gorilla/mux"
 	"github.com/libgit2/git2go"
+	auth "github.com/vsheffer/go-http-auth"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -89,6 +90,7 @@ func getRepoDirListingHandler(w http.ResponseWriter, r *http.Request) {
 
 func getSpecFileHandler(w http.ResponseWriter, r *http.Request) {
 	fileName := mux.Vars(r)["filename"]
+	log.Printf("fileName = %s", fileName)
 	bytes, err := ioutil.ReadFile(repoDir + fileName)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
@@ -190,13 +192,13 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(historyResponse)
 }
 
-func newUserHandler(w http.ResponseWriter, r *http.Request) {
-}
-
 func main() {
+	var passwordFile string
+
 	flag.StringVar(&repoDir, "repo-dir", "", "The directory where the Git repository will be saved.")
 	flag.StringVar(&staticDir, "static-dir", "", "The directory containing static content to be served.")
 	flag.StringVar(&corsAllowedHost, "cors-allowed-origin", "*", "The hostname of the allowed origin for cors support.  All hosts are allowed by default.")
+	flag.StringVar(&passwordFile, "password-file", "htpasswd", "The path to the password file that should match the format of htpasswd.")
 	flag.Parse()
 	if len(repoDir) == 0 {
 		log.Fatalf("repo-dir is required.")
@@ -226,12 +228,25 @@ func main() {
 	log.Printf("repos = %+v", repo)
 
 	r := mux.NewRouter().StrictSlash(false)
+
+	secrets := auth.HtpasswdFileProvider(passwordFile)
+	authenticator := auth.NewBasicAuthenticator("gitrest", secrets)
+
 	r.HandleFunc("/specfiles", getRepoDirListingHandler).Methods("GET")
 	r.HandleFunc("/specfiles/{filename}", getSpecFileHandler).Methods("GET")
 	r.HandleFunc("/specfiles/{filename}", saveSpecFileHandler).Methods("PUT")
 	r.HandleFunc("/commitfile/{filename}", commitFileHandler).Methods("POST")
 	r.HandleFunc("/history/{filename}", historyHandler).Methods("GET")
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(staticDir)))
-	http.Handle("/", r)
-	http.ListenAndServe(":8080", r)
+	http.Handle("/", authenticator.Wrap(func(w http.ResponseWriter, ar *auth.AuthenticatedRequest) {
+		w.Header().Add("X-Basic-Auth-Username", ar.Username)
+		r.ServeHTTP(w, &ar.Request)
+	}))
+	s := &http.Server{
+		Addr:           ":8080",
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	log.Fatal(s.ListenAndServe())
 }
