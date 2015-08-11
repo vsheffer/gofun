@@ -1,4 +1,5 @@
 FROM ubuntu:14.04.2
+LABEL go-http-auth.git.tag=e59c15b
 MAINTAINER vince.sheffer@bhnetwork.com
 ADD ./gitrest /usr/bin/gitrest
 ADD ./gitconfig /root/.gitconfig
